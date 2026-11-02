@@ -4,7 +4,6 @@ project(DoubleMansi VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# JUCE wird beim ersten Build automatisch von GitHub geladen
 include(FetchContent)
 FetchContent_Declare(
     JUCE
@@ -26,12 +25,12 @@ juce_add_plugin(DoubleMansi
     VST3_CATEGORIES Fx Delay
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-juce_add_binary_data(DoubleMansiData SOURCES Resources/BebasNeue-Regular.ttf)
+juce_add_binary_data(DoubleMansiData SOURCES BebasNeue-Regular.ttf)
 
 target_sources(DoubleMansi PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp
-    Source/DoubleVoice.cpp)
+    PluginProcessor.cpp
+    PluginEditor.cpp
+    DoubleVoice.cpp)
 
 target_compile_definitions(DoubleMansi PUBLIC
     JUCE_WEB_BROWSER=0
