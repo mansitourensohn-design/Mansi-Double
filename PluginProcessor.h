@@ -23,10 +23,13 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.15; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    // Presets
+    struct Preset { const char* name; float timing, detune, variation, width, tone, mix; bool third; };
+    static const std::vector<Preset>& presets();
+    int getNumPrograms() override { return (int) presets().size(); }
+    int getCurrentProgram() override { return currentPreset; }
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -39,8 +42,9 @@ public:
     std::atomic<float> meterLeft { 0.0f }, meterRight { 0.0f };
 
 private:
-    DoubleVoice voiceLeft, voiceRight;
-    juce::SmoothedValue<float> timing, detune, variation, width, mix, dryGain;
+    DoubleVoice voiceLeft, voiceRight, voiceCenter;
+    juce::SmoothedValue<float> timing, detune, variation, width, mix, dryGain, thirdGain;
+    int currentPreset = 0;
 
     std::atomic<float>* pTiming = nullptr;
     std::atomic<float>* pDetune = nullptr;
@@ -49,6 +53,7 @@ private:
     std::atomic<float>* pTone = nullptr;
     std::atomic<float>* pMix = nullptr;
     std::atomic<float>* pOnly = nullptr;
+    std::atomic<float>* pThird = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DoubleMansiProcessor)
 };

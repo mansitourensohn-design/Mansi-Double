@@ -24,11 +24,17 @@ public:
                            float pos, float startAngle, float endAngle, juce::Slider&) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
     juce::Label* createSliderTextBox (juce::Slider&) override;
+    void drawComboBox (juce::Graphics&, int w, int h, bool down, int, int, int, int, juce::ComboBox&) override;
+    void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
+    juce::Font getComboBoxFont (juce::ComboBox&) override;
+    juce::Font getPopupMenuFont() override;
 
     juce::Typeface::Ptr display;   // Bebas Neue (OFL)
 };
 
-class DoubleMansiEditor : public juce::AudioProcessorEditor, private juce::Timer
+class DoubleMansiEditor : public juce::AudioProcessorEditor,
+                          private juce::Timer,
+                          private juce::AudioProcessorParameter::Listener
 {
 public:
     explicit DoubleMansiEditor (DoubleMansiProcessor&);
@@ -39,6 +45,8 @@ public:
 
 private:
     void timerCallback() override;
+    void parameterValueChanged (int, float) override { presetDirty = true; }
+    void parameterGestureChanged (int, bool) override {}
     void addKnob (int index, const juce::String& id, const juce::String& label);
 
     DoubleMansiProcessor& processor;
@@ -51,6 +59,14 @@ private:
 
     juce::ToggleButton onlyButton { "NUR DOUBLES" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onlyAttachment;
+    juce::ToggleButton thirdButton { "3. DOUBLE" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> thirdAttachment;
+
+    juce::ComboBox presetBox;
+    std::atomic<bool> presetDirty { false };
+    bool applyingPreset = false;
+
+    juce::Image logo;
 
     float meterL = 0.0f, meterR = 0.0f;
     juce::Rectangle<int> meterArea;

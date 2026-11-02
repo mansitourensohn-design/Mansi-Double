@@ -26,6 +26,11 @@ MansiLookAndFeel::MansiLookAndFeel()
     setColour (juce::Slider::textBoxTextColourId, Palette::text);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::Label::textColourId, Palette::text);
+    setColour (juce::ComboBox::textColourId, Palette::text);
+    setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff1a181d));
+    setColour (juce::PopupMenu::textColourId, Palette::text);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::lavender.withAlpha (0.35f));
+    setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
 }
 
 juce::Label* MansiLookAndFeel::createSliderTextBox (juce::Slider& s)
@@ -108,6 +113,33 @@ void MansiLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& 
     g.drawText (b.getButtonText(), r, juce::Justification::centred);
 }
 
+void MansiLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box)
+{
+    auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (1.5f);
+    const float corner = r.getHeight() * 0.5f;
+    g.setColour (juce::Colours::white.withAlpha (box.isMouseOver (true) ? 0.08f : 0.03f));
+    g.fillRoundedRectangle (r, corner);
+    g.setGradientFill (brandGradient (r));
+    g.drawRoundedRectangle (r, corner, 1.4f);
+
+    // kleiner Pfeil
+    const float ax = r.getRight() - 22.0f, ay = r.getCentreY();
+    juce::Path arrow;
+    arrow.addTriangle (ax - 5.0f, ay - 2.5f, ax + 5.0f, ay - 2.5f, ax, ay + 3.5f);
+    g.setColour (Palette::text);
+    g.fillPath (arrow);
+}
+
+void MansiLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
+{
+    label.setBounds (16, 1, box.getWidth() - 44, box.getHeight() - 2);
+    label.setFont (getComboBoxFont (box));
+    label.setJustificationType (juce::Justification::centredLeft);
+}
+
+juce::Font MansiLookAndFeel::getComboBoxFont (juce::ComboBox&) { return uiFont (14.0f, true); }
+juce::Font MansiLookAndFeel::getPopupMenuFont() { return uiFont (15.0f); }
+
 //==============================================================================
 DoubleMansiEditor::DoubleMansiEditor (DoubleMansiProcessor& p)
     : AudioProcessorEditor (p), processor (p)
@@ -125,13 +157,43 @@ DoubleMansiEditor::DoubleMansiEditor (DoubleMansiProcessor& p)
     onlyButton.setClickingTogglesState (true);
     onlyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "only", onlyButton);
 
-    setSize (680, 500);
+    addAndMakeVisible (thirdButton);
+    thirdButton.setClickingTogglesState (true);
+    thirdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, "third", thirdButton);
+
+    // Presets
+    for (int i = 0; i < processor.getNumPrograms(); ++i)
+        presetBox.addItem (processor.getProgramName (i), i + 1);
+    presetBox.setTextWhenNothingSelected ("PRESETS");
+    presetBox.setSelectedId (processor.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetBox.onChange = [this]
+    {
+        const int id = presetBox.getSelectedId();
+        if (id <= 0 || applyingPreset) return;
+        applyingPreset = true;
+        processor.setCurrentProgram (id - 1);
+        presetDirty = false;
+        applyingPreset = false;
+    };
+    addAndMakeVisible (presetBox);
+
+    // wenn ein Regler bewegt wird, ist es kein reines Preset mehr
+    for (auto* param : processor.getParameters())
+        param->addListener (this);
+
+   #if DM_HAS_LOGO
+    logo = juce::ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
+   #endif
+
+    setSize (720, 520);
     startTimerHz (30);
 }
 
 DoubleMansiEditor::~DoubleMansiEditor()
 {
     stopTimer();
+    for (auto* param : processor.getParameters())
+        param->removeListener (this);
     setLookAndFeel (nullptr);
 }
 
@@ -166,6 +228,22 @@ void DoubleMansiEditor::timerCallback()
     meterL = juce::jmax (processor.meterLeft.load(), meterL * 0.88f);
     meterR = juce::jmax (processor.meterRight.load(), meterR * 0.88f);
     repaint (meterArea);
+
+    if (presetDirty.exchange (false) && ! applyingPreset && presetBox.getSelectedId() != 0)
+    {
+        // pruefen, ob die Regler noch exakt dem gewaehlten Preset entsprechen
+        const auto& pr = DoubleMansiProcessor::presets()[(size_t) presetBox.getSelectedId() - 1];
+        auto val = [this] (const char* id) { return processor.apvts.getRawParameterValue (id)->load(); };
+        const bool same = std::abs (val ("timing") - pr.timing) < 0.05f
+                       && std::abs (val ("detune") - pr.detune) < 0.05f
+                       && std::abs (val ("variation") - pr.variation) < 0.5f
+                       && std::abs (val ("width") - pr.width) < 0.5f
+                       && std::abs (val ("tone") - pr.tone) < 1.0f
+                       && std::abs (val ("mix") - pr.mix) < 0.5f
+                       && ((val ("third") > 0.5f) == pr.third);
+        if (! same)
+            presetBox.setText (presetBox.getText().upToFirstOccurrenceOf (" *", false, false) + " *", juce::dontSendNotification);
+    }
 }
 
 void DoubleMansiEditor::paint (juce::Graphics& g)
@@ -187,17 +265,26 @@ void DoubleMansiEditor::paint (juce::Graphics& g)
     glow (Palette::pink, b.getWidth() * 0.9f, b.getHeight() * 0.95f, 280.0f);
     glow (Palette::sky, b.getWidth() * 0.85f, 30.0f, 180.0f);
 
-    // Titel im Verlaufs-Schriftzug
-    auto titleArea = juce::Rectangle<float> (0.0f, 22.0f, b.getWidth(), 64.0f);
-    g.setFont (juce::Font (juce::FontOptions (lnf.display).withHeight (64.0f)).withExtraKerningFactor (0.04f));
-    g.setGradientFill (juce::ColourGradient (Palette::lavender, b.getWidth() * 0.25f, 0,
-                                             Palette::sky, b.getWidth() * 0.75f, 0, false));
+    // Titel im Verlaufs-Schriftzug (mit Logo davor, falls vorhanden)
+    const juce::String title ("DOUBLE MANSI");
+    const auto titleFont = juce::Font (juce::FontOptions (lnf.display).withHeight (64.0f)).withExtraKerningFactor (0.04f);
+    const float textW = juce::GlyphArrangement::getStringWidth (titleFont, title);
+    const float logoH = 66.0f;
+    const float logoW = logo.isValid() ? logoH * (float) logo.getWidth() / (float) juce::jmax (1, logo.getHeight()) : 0.0f;
+    const float gap = logo.isValid() ? 16.0f : 0.0f;
+    const float startX = (b.getWidth() - (logoW + gap + textW)) * 0.5f;
+
+    if (logo.isValid())
+        g.drawImage (logo, juce::Rectangle<float> (startX, 20.0f, logoW, logoH), juce::RectanglePlacement::centred);
+
+    auto titleArea = juce::Rectangle<float> (startX + logoW + gap, 22.0f, textW + 4.0f, 64.0f);
+    g.setFont (titleFont);
     {
-        juce::ColourGradient tg (Palette::lavender, b.getWidth() * 0.22f, 0, Palette::sky, b.getWidth() * 0.78f, 0, false);
+        juce::ColourGradient tg (Palette::lavender, titleArea.getX(), 0, Palette::sky, titleArea.getRight(), 0, false);
         tg.addColour (0.62, Palette::pink);
         g.setGradientFill (tg);
     }
-    g.drawText ("DOUBLE MANSI", titleArea, juce::Justification::centred);
+    g.drawText (title, titleArea, juce::Justification::centredLeft);
 
     // Untertitel mit weiter Laufweite und Punkten
     g.setFont (uiFont (13.0f, true).withExtraKerningFactor (0.55f));
@@ -252,7 +339,12 @@ void DoubleMansiEditor::resized()
         knobs[i].setBounds (cell.reduced (30, 4));
     }
 
-    auto bottom = juce::Rectangle<int> (24, 450, getWidth() - 48, 36);
-    onlyButton.setBounds (bottom.removeFromLeft (190));
-    meterArea = bottom.removeFromRight (200).withSizeKeepingCentre (200, 17);
+    auto bottom = juce::Rectangle<int> (24, 452, getWidth() - 48, 36);
+    onlyButton.setBounds (bottom.removeFromLeft (160));
+    bottom.removeFromLeft (12);
+    thirdButton.setBounds (bottom.removeFromLeft (140));
+    bottom.removeFromLeft (12);
+    presetBox.setBounds (bottom.removeFromLeft (200));
+    bottom.removeFromLeft (20);
+    meterArea = bottom.withSizeKeepingCentre (juce::jmin (150, bottom.getWidth()), 17);
 }

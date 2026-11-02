@@ -25,7 +25,14 @@ juce_add_plugin(DoubleMansi
     VST3_CATEGORIES Fx Delay
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-juce_add_binary_data(DoubleMansiData SOURCES BebasNeue-Regular.ttf)
+# Logo: wird automatisch eingebaut, wenn eine Datei "logo.png" im Projekt liegt
+set(DM_ASSETS BebasNeue-Regular.ttf)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/logo.png")
+    list(APPEND DM_ASSETS logo.png)
+    target_compile_definitions(DoubleMansi PRIVATE DM_HAS_LOGO=1)
+    message(STATUS "Logo gefunden: logo.png")
+endif()
+juce_add_binary_data(DoubleMansiData SOURCES ${DM_ASSETS})
 
 target_sources(DoubleMansi PRIVATE
     PluginProcessor.cpp

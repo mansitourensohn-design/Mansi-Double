@@ -15,6 +15,49 @@ DoubleMansiProcessor::DoubleMansiProcessor()
     pTone      = apvts.getRawParameterValue ("tone");
     pMix       = apvts.getRawParameterValue ("mix");
     pOnly      = apvts.getRawParameterValue ("only");
+    pThird     = apvts.getRawParameterValue ("third");
+}
+
+const std::vector<DoubleMansiProcessor::Preset>& DoubleMansiProcessor::presets()
+{
+    //                          Timing Detune Var  Breite  Ton     Doubles 3.Double
+    static const std::vector<Preset> list {
+        { "Natuerlich",          22.0f,  9.0f, 50.0f,  80.0f, 9000.0f, 60.0f, false },
+        { "Tight Pop",           12.0f,  6.0f, 30.0f,  90.0f, 10000.0f, 55.0f, false },
+        { "Breiter Refrain",     28.0f, 12.0f, 70.0f, 100.0f, 8000.0f, 70.0f, true  },
+        { "Rock-Wall",           35.0f, 15.0f, 80.0f, 100.0f, 7000.0f, 80.0f, true  },
+        { "Fluester-Doubles",    18.0f,  8.0f, 40.0f,  70.0f, 5000.0f, 40.0f, false },
+        { "Choir-Stack",         40.0f, 20.0f, 90.0f, 100.0f, 6500.0f, 75.0f, true  },
+        { "Lo-Fi Schatten",      30.0f, 10.0f, 60.0f,  60.0f, 3500.0f, 50.0f, true  },
+    };
+    return list;
+}
+
+const juce::String DoubleMansiProcessor::getProgramName (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) presets().size())) return {};
+    juce::String n (presets()[(size_t) index].name);
+    return n.replace ("ue", juce::CharPointer_UTF8 ("\xc3\xbc"));
+}
+
+void DoubleMansiProcessor::setCurrentProgram (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) presets().size())) return;
+    currentPreset = index;
+    const auto& pr = presets()[(size_t) index];
+
+    auto set = [this] (const char* id, float value)
+    {
+        if (auto* param = apvts.getParameter (id))
+            param->setValueNotifyingHost (param->convertTo0to1 (value));
+    };
+    set ("timing", pr.timing);
+    set ("detune", pr.detune);
+    set ("variation", pr.variation);
+    set ("width", pr.width);
+    set ("tone", pr.tone);
+    set ("mix", pr.mix);
+    set ("third", pr.third ? 1.0f : 0.0f);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout DoubleMansiProcessor::createLayout()
@@ -37,6 +80,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DoubleMansiProcessor::create
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "mix", 1 }, "Doubles",
         NormalisableRange<float> (0.0f, 100.0f, 1.0f), 60.0f, pct));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "only", 1 }, "Nur Doubles", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "third", 1 }, "Drittes Double", false));
 
     return { p.begin(), p.end() };
 }
@@ -53,8 +97,9 @@ void DoubleMansiProcessor::prepareToPlay (double sampleRate, int)
 {
     voiceLeft.prepare (sampleRate, 1337);
     voiceRight.prepare (sampleRate, 4242);
+    voiceCenter.prepare (sampleRate, 777);
 
-    for (auto* s : { &timing, &detune, &variation, &width, &mix, &dryGain })
+    for (auto* s : { &timing, &detune, &variation, &width, &mix, &dryGain, &thirdGain })
         s->reset (sampleRate, 0.05);
 
     timing.setCurrentAndTargetValue (pTiming->load());
@@ -63,6 +108,7 @@ void DoubleMansiProcessor::prepareToPlay (double sampleRate, int)
     width.setCurrentAndTargetValue (pWidth->load() * 0.01f);
     mix.setCurrentAndTargetValue (pMix->load() * 0.01f);
     dryGain.setCurrentAndTargetValue (pOnly->load() > 0.5f ? 0.0f : 1.0f);
+    thirdGain.setCurrentAndTargetValue (pThird->load() > 0.5f ? 1.0f : 0.0f);
 }
 
 void DoubleMansiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -80,9 +126,11 @@ void DoubleMansiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     width.setTargetValue (pWidth->load() * 0.01f);
     mix.setTargetValue (pMix->load() * 0.01f);
     dryGain.setTargetValue (pOnly->load() > 0.5f ? 0.0f : 1.0f);
+    thirdGain.setTargetValue (pThird->load() > 0.5f ? 1.0f : 0.0f);
 
     voiceLeft.setTone (pTone->load());
     voiceRight.setTone (pTone->load() * 0.9f); // rechte Stimme minimal dunkler
+    voiceCenter.setTone (pTone->load() * 0.8f); // mittlere Stimme etwas weicher
 
     auto* L = buffer.getWritePointer (0);
     auto* R = buffer.getWritePointer (1);
@@ -103,6 +151,7 @@ void DoubleMansiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         const float wd = width.getNextValue();
         const float mx = mix.getNextValue();
         const float dry = dryGain.getNextValue();
+        const float th = thirdGain.getNextValue();
 
         // zwei Stimmen mit unterschiedlichem Timing und entgegengesetzter Verstimmung
         const float v1 = voiceLeft.process (mono, tm, +dt, va);
@@ -111,10 +160,19 @@ void DoubleMansiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         // Panorama mit gleicher Lautheit: Stimme 1 nach links, Stimme 2 nach rechts
         const float a1 = (1.0f - wd) * quarterPi;          // 0 = ganz links
         const float a2 = (1.0f + wd) * quarterPi;          // pi/2 = ganz rechts
-        const float level = mx * 0.8f;
+        // drittes Double: mittig, mit eigenem Timing und leichter Verstimmung nach oben
+        float v3 = 0.0f;
+        if (th > 0.0001f)
+            v3 = th * voiceCenter.process (mono, tm * 0.6f + 11.0f, dt * 0.5f, va);
+        else
+            voiceCenter.process (mono, tm * 0.6f + 11.0f, dt * 0.5f, va); // weiterlaufen lassen, damit das Einblenden sauber ist
 
-        const float outL = inL * dry + level * (v1 * std::cos (a1) + v2 * std::cos (a2));
-        const float outR = inR * dry + level * (v1 * std::sin (a1) + v2 * std::sin (a2));
+        // bei drei Stimmen etwas leiser mischen, damit die Gesamtlautstaerke gleich bleibt
+        const float level = mx * 0.8f * (1.0f - 0.18f * th);
+        const float centre = 0.7071f * 0.85f * v3;
+
+        const float outL = inL * dry + level * (v1 * std::cos (a1) + v2 * std::cos (a2) + centre);
+        const float outR = inR * dry + level * (v1 * std::sin (a1) + v2 * std::sin (a2) + centre);
 
         L[i] = outL;
         R[i] = outR;
